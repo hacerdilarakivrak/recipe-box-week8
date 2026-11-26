@@ -28,3 +28,36 @@ def test_list_recipes():
 def test_unknown_recipe_404():
     r = client.get("/recipes/99999")
     assert r.status_code == 404
+
+
+def test_shopping_list_merges_and_deduplicates_ingredients():
+    first = client.post(
+        "/recipes",
+        json={"title": "First", "ingredients": ["flour", "milk", "flour"]},
+    ).json()
+    second = client.post(
+        "/recipes",
+        json={"title": "Second", "ingredients": ["milk", "eggs"]},
+    ).json()
+
+    r = client.get(f"/shopping-list?ids={first['id']},{second['id']}")
+
+    assert r.status_code == 200
+    assert r.json() == ["flour", "milk", "eggs"]
+
+
+def test_shopping_list_rejects_invalid_ids():
+    r = client.get("/shopping-list?ids=1,nope")
+
+    assert r.status_code == 422
+
+
+def test_shopping_list_returns_404_for_missing_recipe():
+    existing = client.post(
+        "/recipes",
+        json={"title": "Existing", "ingredients": ["flour"]},
+    ).json()
+
+    r = client.get(f"/shopping-list?ids={existing['id']},99999")
+
+    assert r.status_code == 404

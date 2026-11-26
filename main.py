@@ -15,7 +15,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -84,6 +84,41 @@ def list_recipes():
     with closing(get_db()) as conn:
         rows = conn.execute("SELECT * FROM recipes ORDER BY id").fetchall()
     return [_row_to_recipe(r) for r in rows]
+
+
+@app.get("/shopping-list")
+def shopping_list(ids: str = Query(...)):
+    id_values = ids.split(",")
+    if any(not value.isdigit() or int(value) <= 0 for value in id_values):
+        raise HTTPException(
+            status_code=422,
+            detail="ids must be comma-separated positive integers",
+        )
+    recipe_ids = [int(value) for value in id_values]
+
+    placeholders = ",".join("?" for _ in set(recipe_ids))
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            f"SELECT id, ingredients FROM recipes WHERE id IN ({placeholders})",
+            tuple(set(recipe_ids)),
+        ).fetchall()
+
+    recipes_by_id = {row["id"]: row for row in rows}
+    missing_ids = [recipe_id for recipe_id in recipe_ids if recipe_id not in recipes_by_id]
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown recipe id(s): {', '.join(map(str, missing_ids))}",
+        )
+
+    ingredients = []
+    seen = set()
+    for recipe_id in recipe_ids:
+        for ingredient in json.loads(recipes_by_id[recipe_id]["ingredients"]):
+            if ingredient not in seen:
+                ingredients.append(ingredient)
+                seen.add(ingredient)
+    return ingredients
 
 
 @app.get("/recipes/{recipe_id}")

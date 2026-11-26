@@ -13,6 +13,7 @@ uvicorn main:app --reload   # http://localhost:8000  (UI at /, docs at /docs)
 ## Endpoints
 - `POST /recipes` `{ "title": ..., "ingredients": [...], "tags": [...] }`
 - `GET /recipes`, `GET /recipes/{id}`
+- `GET /shopping-list?ids=1,2,3` — merge ingredients from the selected recipes
 
 ## Parallel work with git worktrees
 ```bash
