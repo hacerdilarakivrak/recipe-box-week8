@@ -6,13 +6,16 @@ agents and a generator–critic loop.
 ## Setup
 ```bash
 pip install -r requirements.txt
-pytest                      # 3 tests should pass
+pytest                      # 13 tests should pass
 uvicorn main:app --reload   # http://localhost:8000  (UI at /, docs at /docs)
 ```
 
 ## Endpoints
 - `POST /recipes` `{ "title": ..., "ingredients": [...], "tags": [...] }`
 - `GET /recipes`, `GET /recipes/{id}`
+- `GET /recipes/{id}/scaled?factor=2` — scale numeric ingredient quantities;
+  factors must be positive, finite, and within safe bounds; scaled quantities
+  over 1,000 characters are rejected with `422`
 - `GET /shopping-list?ids=1,2,3` — merge ingredients from the selected recipes
 
 ## Parallel work with git worktrees

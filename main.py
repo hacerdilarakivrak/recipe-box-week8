@@ -11,8 +11,10 @@ Test:
     pytest
 """
 import json
+import re
 import sqlite3
 from contextlib import closing
+from decimal import Decimal, DecimalException, localcontext
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -23,6 +25,9 @@ BASE = Path(__file__).parent
 DB_PATH = BASE / "recipes.db"
 
 app = FastAPI(title="Recipe Box")
+
+QUANTITY_PATTERN = re.compile(r"^(\s*)((?:\d+(?:\.\d*)?|\.\d+))(\s+.+)$")
+MAX_SCALED_QUANTITY_LENGTH = 1000
 
 
 def get_db() -> sqlite3.Connection:
@@ -60,6 +65,42 @@ def _row_to_recipe(row: sqlite3.Row) -> dict:
         "ingredients": json.loads(row["ingredients"]),
         "tags": json.loads(row["tags"]),
     }
+
+
+def _scale_ingredient(ingredient: str, factor: Decimal) -> str:
+    match = QUANTITY_PATTERN.match(ingredient)
+    if match is None:
+        return ingredient
+
+    prefix, quantity, suffix = match.groups()
+    quantity_value = Decimal(quantity)
+    if (
+        abs(quantity_value.adjusted()) > MAX_SCALED_QUANTITY_LENGTH
+        or len(quantity_value.as_tuple().digits) > MAX_SCALED_QUANTITY_LENGTH
+    ):
+        raise HTTPException(status_code=422, detail="scaled ingredient quantity is too large")
+
+    with localcontext() as context:
+        context.prec = (
+            len(quantity_value.as_tuple().digits) + len(factor.as_tuple().digits)
+        )
+        scaled_value = (quantity_value * factor).normalize()
+
+    value_tuple = scaled_value.as_tuple()
+    digit_count = len(value_tuple.digits)
+    exponent = value_tuple.exponent
+    adjusted = digit_count + exponent - 1
+    if exponent >= 0:
+        output_length = digit_count + exponent
+    elif adjusted >= 0:
+        output_length = digit_count + 1
+    else:
+        output_length = 2 + (-adjusted - 1) + digit_count
+    if output_length > MAX_SCALED_QUANTITY_LENGTH:
+        raise HTTPException(status_code=422, detail="scaled ingredient quantity is too large")
+
+    scaled_quantity = format(scaled_value, "f")
+    return f"{prefix}{scaled_quantity}{suffix}"
 
 
 @app.get("/")
@@ -131,3 +172,33 @@ def get_recipe(recipe_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="unknown recipe")
     return _row_to_recipe(row)
+
+
+@app.get("/recipes/{recipe_id}/scaled")
+def get_scaled_recipe(recipe_id: int, factor: Decimal = Query(..., gt=0)):
+    if not factor.is_finite():
+        raise HTTPException(status_code=422, detail="factor must be a positive finite number")
+    if (
+        abs(factor.adjusted()) > MAX_SCALED_QUANTITY_LENGTH
+        or len(factor.as_tuple().digits) > MAX_SCALED_QUANTITY_LENGTH
+    ):
+        raise HTTPException(status_code=422, detail="factor is too large or small to scale safely")
+
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            "SELECT * FROM recipes WHERE id = ?", (recipe_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown recipe")
+
+    recipe = _row_to_recipe(row)
+    try:
+        recipe["ingredients"] = [
+            _scale_ingredient(ingredient, factor)
+            for ingredient in recipe["ingredients"]
+        ]
+    except DecimalException as exc:
+        raise HTTPException(
+            status_code=422, detail="factor is too large or small to scale safely"
+        ) from exc
+    return recipe
